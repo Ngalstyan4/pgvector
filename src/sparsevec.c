@@ -631,6 +631,38 @@ vector_to_sparsevec(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Return non-empty argument array's i-th element as float
+ * todo:: maybe write this as macro, since it appears in tight for loops
+ * and branches here can be resolved?
+ */
+static float
+arr_elem_to_float(Datum arr_elem, Oid arr_elemtype)
+{
+	if (arr_elemtype == INT4OID)
+	{
+		return (float) DatumGetInt32(arr_elem);
+	}
+	else if (arr_elemtype == FLOAT8OID)
+	{
+		return DatumGetFloat8(arr_elem);
+	}
+	else if (arr_elemtype == FLOAT4OID)
+	{
+		return DatumGetFloat4(arr_elem);
+	}
+	else if (arr_elemtype == NUMERICOID)
+	{
+		return DatumGetFloat4(
+							  DirectFunctionCall1(numeric_float4, arr_elem));
+	}
+	else
+	{
+		ereport(ERROR, (errcode(ERRCODE_DATA_EXCEPTION),
+						errmsg("unsupported array type")));
+	}
+}
+
+/*
  * Convert real array to sparse vector
  */
 PGDLLEXPORT PG_FUNCTION_INFO_V1(array_to_sparsevec);
@@ -665,31 +697,10 @@ array_to_sparsevec(PG_FUNCTION_ARGS)
 	CheckDim(nelemsp);
 	CheckExpectedDim(typmod, nelemsp);
 
-	if (ARR_ELEMTYPE(array) == INT4OID)
+	for (int i = 0; i < nelemsp; i++)
 	{
-		for (int i = 0; i < nelemsp; i++)
-			nnz += (DatumGetInt32(elemsp[i]) != 0);
-	}
-	else if (ARR_ELEMTYPE(array) == FLOAT8OID)
-	{
-		for (int i = 0; i < nelemsp; i++)
-			nnz += (DatumGetFloat8(elemsp[i]) != 0);
-	}
-	else if (ARR_ELEMTYPE(array) == FLOAT4OID)
-	{
-		for (int i = 0; i < nelemsp; i++)
-			nnz += (DatumGetFloat4(elemsp[i]) != 0);
-	}
-	else if (ARR_ELEMTYPE(array) == NUMERICOID)
-	{
-		for (int i = 0; i < nelemsp; i++)
-			nnz += (DatumGetFloat4(DirectFunctionCall1(numeric_float4, elemsp[i])) != 0);
-	}
-	else
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_DATA_EXCEPTION),
-				 errmsg("unsupported array type")));
+		if (arr_elem_to_float(elemsp[i], ARR_ELEMTYPE(array)) != 0)
+			nnz++;
 	}
 
 	CheckNnz(nnz, nelemsp);
@@ -700,44 +711,20 @@ array_to_sparsevec(PG_FUNCTION_ARGS)
 	instr_time	duration;
 
 	INSTR_TIME_SET_CURRENT(start);
+	for (int i = 0; i < nelemsp; i++)
+	{
+		float		arr_i = arr_elem_to_float(elemsp[i], ARR_ELEMTYPE(array));
 
-#define PROCESS_ARRAY_ELEM(elem) \
-    do { \
-        if ((elem) != 0) { \
-            /* Safety check */ \
-            if (j >= result->nnz) \
-                elog(ERROR, "safety check failed"); \
-            result->indices[j] = i; \
-            sparsevec_values[j] = (elem); \
-            j++; \
-        } \
-    } while (0)
+		if (arr_i != 0)
+		{
+			/* Safety check */
+			if (j >= result->nnz)
+				elog(ERROR, "safety check failed");
 
-	if (ARR_ELEMTYPE(array) == INT4OID)
-	{
-		for (int i = 0; i < nelemsp; i++)
-			PROCESS_ARRAY_ELEM(DatumGetInt32(elemsp[i]));
-	}
-	else if (ARR_ELEMTYPE(array) == FLOAT8OID)
-	{
-		for (int i = 0; i < nelemsp; i++)
-			PROCESS_ARRAY_ELEM(DatumGetFloat8(elemsp[i]));
-	}
-	else if (ARR_ELEMTYPE(array) == FLOAT4OID)
-	{
-		for (int i = 0; i < nelemsp; i++)
-			PROCESS_ARRAY_ELEM(DatumGetFloat4(elemsp[i]));
-	}
-	else if (ARR_ELEMTYPE(array) == NUMERICOID)
-	{
-		for (int i = 0; i < nelemsp; i++)
-			PROCESS_ARRAY_ELEM(DatumGetFloat4(DirectFunctionCall1(numeric_float4, elemsp[i])));
-	}
-	else
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_DATA_EXCEPTION),
-				 errmsg("unsupported array type")));
+			result->indices[j] = i;
+			sparsevec_values[j] = arr_i;
+			j++;
+		}
 	}
 	INSTR_TIME_SET_CURRENT(duration);
 	INSTR_TIME_SUBTRACT(duration, start);
