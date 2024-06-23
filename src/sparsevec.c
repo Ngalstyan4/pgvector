@@ -9,6 +9,7 @@
 #include "halfutils.h"
 #include "halfvec.h"
 #include "libpq/pqformat.h"
+#include "portability/instr_time.h"
 #include "sparsevec.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -695,6 +696,10 @@ array_to_sparsevec(PG_FUNCTION_ARGS)
 
 	result = InitSparseVector(nelemsp, nnz);
 	sparsevec_values = SPARSEVEC_VALUES(result);
+	instr_time	start;
+	instr_time	duration;
+
+	INSTR_TIME_SET_CURRENT(start);
 
 #define PROCESS_ARRAY_ELEM(elem) \
     do { \
@@ -734,6 +739,11 @@ array_to_sparsevec(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_DATA_EXCEPTION),
 				 errmsg("unsupported array type")));
 	}
+	INSTR_TIME_SET_CURRENT(duration);
+	INSTR_TIME_SUBTRACT(duration, start);
+
+	elog(INFO, "%s: %.3f ms", "arr elem to float bench",
+		 INSTR_TIME_GET_MILLISEC(duration));
 
 #undef PROCESS_ARRAY_ELEM
 
